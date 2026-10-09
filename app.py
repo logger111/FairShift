@@ -38,7 +38,6 @@ with tab_staff:
     st.subheader("👥 Manage Staff & Individual Availability")
     st.write("Add real employee names and define their individual availability constraints.")
     
-    # Add new employee form
     with st.expander("➕ Add New Employee", expanded=False):
         col_a, col_b, col_c = st.columns(3)
         with col_a:
@@ -62,7 +61,6 @@ with tab_staff:
             st.success(f"Added {new_name} to workforce!")
             st.rerun()
 
-    # Staff Dataframe display with quick actions
     df_staff_ui = pd.DataFrame(st.session_state.staff_list)
     df_staff_ui["Unavailable_Days"] = df_staff_ui["Unavailable_Days"].apply(lambda x: ", ".join(x) if x else "None")
     
@@ -92,8 +90,7 @@ with tab_roster:
     if req_evening > 0: shift_types.append("Evening")
     if req_night > 0: shift_types.append("Night")
 
-    # ALGORITHM: Generate Schedule matching constraints
-    staff_db = {emp["Name"]: {**emp, "Assigned_Count": 0, "Night_Count": 0} for emp in st.session_state.staff_list}
+    staff_db = {emp["Name"]: {**emp, "Assigned_Count": 0, "Night_Count": 0, "Weekend_Count": 0} for emp in st.session_state.staff_list}
     
     roster_grid = {day: {s: [] for s in shift_types} for day in days_of_week}
     conflict_logs = []
@@ -101,30 +98,26 @@ with tab_roster:
     np.random.seed(42)
 
     for day in days_of_week:
+        is_weekend = day in ["Saturday", "Sunday"]
         for s_type in shift_types:
             needed = req_morning if s_type == "Morning" else (req_evening if s_type == "Evening" else req_night)
             
-            # Filter candidates based on HARD CONSTRAINTS
             candidates = []
             for name, p in staff_db.items():
-                # Constraint 1: Max Days
                 if p["Assigned_Count"] >= p["Max_Days"]:
                     continue
-                # Constraint 2: Specific Day Unavailable
                 if day in p["Unavailable_Days"]:
                     continue
-                # Constraint 3: No Nights rule
                 if s_type == "Night" and p["No_Nights"]:
                     continue
-                # Constraint 4: Already working today in another shift
                 already_working_today = any(name in roster_grid[day][st_item] for st_item in shift_types)
                 if already_working_today:
                     continue
                     
                 candidates.append(name)
             
-            # Sort candidates by least assigned shifts (Fairness heuristic)
-            candidates.sort(key=lambda x: (staff_db[x]["Assigned_Count"], np.random.rand()))
+            # Prioritize candidates who have worked fewer shifts overall
+            candidates.sort(key=lambda x: (staff_db[x]["Assigned_Count"] / staff_db[x]["Max_Days"], np.random.rand()))
             
             assigned = candidates[:needed]
             roster_grid[day][s_type] = assigned
@@ -133,11 +126,12 @@ with tab_roster:
                 staff_db[name]["Assigned_Count"] += 1
                 if s_type == "Night":
                     staff_db[name]["Night_Count"] += 1
+                if is_weekend:
+                    staff_db[name]["Weekend_Count"] += 1
                     
             if len(assigned) < needed:
                 conflict_logs.append(f"⚠️ **{day} ({s_type}):** Shortage! Needed {needed}, but only assigned {len(assigned)} due to constraints.")
 
-    # Render Roster Table
     st.markdown("### 📋 Generated Roster Grid")
     
     roster_display = []
@@ -151,7 +145,6 @@ with tab_roster:
     df_roster_view = pd.DataFrame(roster_display)
     st.dataframe(df_roster_view, use_container_width=True, hide_index=True)
     
-    # Show Conflict warnings if any
     if conflict_logs:
         st.error("🚨 **Roster Conflicts & Unfilled Shifts Detected:**")
         for log in conflict_logs:
@@ -159,7 +152,6 @@ with tab_roster:
     else:
         st.success("✅ **100% Shift Coverage Achieved!** All individual constraints respected without coverage gaps.")
 
-    # CSV Download for Roster
     csv_roster = df_roster_view.to_csv(index=False).encode('utf-8')
     st.download_button(
         label="📥 Download Weekly Schedule (CSV)",
@@ -175,22 +167,34 @@ with tab_analytics:
     st.subheader("📊 Individual Workload & Fairness Diagnostics")
     
     df_final_stats = pd.DataFrame(list(staff_db.values()))
+    df_final_stats["Workload_%"] = (df_final_stats["Assigned_Count"] / df_final_stats["Max_Days"] * 100).round(1)
     
-    # Calculate FSI
-    counts = df_final_stats["Assigned_Count"].values
-    mean_c = np.mean(counts)
-    std_c = np.std(counts)
-    fsi = round((1 - (std_c / mean_c if mean_c > 0 else 0)) * 100, 1) if mean_c > 0 else 100.0
+    # Calculate FSI based on WORKLOAD PERCENTAGE variance instead of simple raw count
+    workload_ratios = df_final_stats["Assigned_Count"] / df_final_stats["Max_Days"]
+    mean_w = np.mean(workload_ratios)
+    std_w = np.std(workload_ratios)
+    
+    fsi = round((1 - (std_w / mean_w if mean_w > 0 else 0)) * 100, 1) if mean_w > 0 else 100.0
+    fsi = max(0.0, min(100.0, fsi))
+    
+    # Identify Overworked Staff
+    overworked = df_final_stats[df_final_stats["Workload_%"] >= 100]["Name"].tolist()
     
     col_m1, col_m2, col_m3 = st.columns(3)
     col_m1.metric("Fairness Score Index (FSI)", f"{fsi}%")
     col_m2.metric("Total Workforce", len(df_final_stats))
-    col_m3.metric("Conflicts Found", len(conflict_logs))
+    col_m3.metric("Overworked Staff (100% Capacity)", f"{len(overworked)}")
     
     st.markdown("---")
-    st.subheader("Individual Shift Load")
+    
+    if fsi < 75 or len(overworked) > 0:
+        st.warning(f"🟡 **WORKLOAD INEQUALITY ALERT:** {', '.join(overworked)} is working at 100% capacity due to strict availability constraints placed by other team members!")
+    
+    st.subheader("Individual Shift Load & Capacity Utilization")
+    
+    # Display table with workload status
     st.dataframe(
-        df_final_stats[["Name", "Role", "Max_Days", "Assigned_Count", "Night_Count"]],
+        df_final_stats[["Name", "Role", "Max_Days", "Assigned_Count", "Workload_%", "Weekend_Count", "Night_Count"]],
         use_container_width=True,
         hide_index=True
     )

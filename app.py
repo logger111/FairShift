@@ -9,8 +9,8 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("📅 FairShift Engine v3.0 — Real-World Roster & Constraint Builder")
-st.caption("Custom Staff Management, Individual Availability & Dynamic Shift Assignment")
+st.title("📅 FairShift Engine v3.0 — Priority-Based Smart Roster")
+st.caption("Custom Staff Management & Constraint-Aware Scheduling Engine")
 st.markdown("---")
 
 # --- INITIALIZE SESSION STATE FOR STAFF & RESTRICTIONS ---
@@ -24,6 +24,7 @@ if "staff_list" not in st.session_state:
         {"Name": "Rachel Adams", "Role": "Senior", "Max_Days": 5, "No_Nights": True, "Unavailable_Days": []},
         {"Name": "Julia Modi Aq", "Role": "Junior", "Max_Days": 5, "No_Nights": False, "Unavailable_Days": []},
         {"Name": "Antonio Bander", "Role": "Junior", "Max_Days": 5, "No_Nights": False, "Unavailable_Days": []},
+        {"Name": "Energo Pro", "Role": "Senior", "Max_Days": 5, "No_Nights": False, "Unavailable_Days": ["Friday", "Saturday"]},
     ]
 
 # --- TABS FOR NAVIGATION ---
@@ -38,7 +39,6 @@ tab_staff, tab_roster, tab_analytics = st.tabs([
 # ==========================================
 with tab_staff:
     st.subheader("👥 Manage Staff & Individual Availability")
-    st.write("Add real employee names and define their individual availability constraints.")
     
     with st.expander("➕ Add New Employee", expanded=False):
         col_a, col_b, col_c = st.columns(3)
@@ -87,68 +87,88 @@ with tab_roster:
         req_night = st.number_input("Night Shift Staff Needed", min_value=0, max_value=10, value=1)
         
     days_of_week = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-    shift_types = []
-    if req_morning > 0: shift_types.append("Morning")
-    if req_evening > 0: shift_types.append("Evening")
-    if req_night > 0: shift_types.append("Night")
-
-    staff_db = {emp["Name"]: {**emp, "Assigned_Count": 0, "Night_Count": 0, "Weekend_Count": 0} for emp in st.session_state.staff_list}
     
-    roster_grid = {day: {s: [] for s in shift_types} for day in days_of_week}
+    staff_db = {emp["Name"]: {**emp, "Assigned_Count": 0, "Night_Count": 0, "Weekend_Count": 0} for emp in st.session_state.staff_list}
+    roster_grid = {day: {"Morning": [], "Evening": [], "Night": []} for day in days_of_week}
     conflict_logs = []
 
     np.random.seed(42)
 
-    for day in days_of_week:
+    # CREATE ALL SHIFT SLOTS TO FILL (Priority: Night -> Weekend -> Day)
+    shift_slots = []
+    
+    # 1. Add Night Shifts first (Highest Priority Constraint)
+    if req_night > 0:
+        for day in days_of_week:
+            shift_slots.append({"day": day, "type": "Night", "needed": req_night, "priority": 1})
+            
+    # 2. Add Weekend Shifts next
+    for day in ["Saturday", "Sunday"]:
+        if req_morning > 0: shift_slots.append({"day": day, "type": "Morning", "needed": req_morning, "priority": 2})
+        if req_evening > 0: shift_slots.append({"day": day, "type": "Evening", "needed": req_evening, "priority": 2})
+        
+    # 3. Add Weekday Morning/Evening Shifts
+    for day in ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]:
+        if req_morning > 0: shift_slots.append({"day": day, "type": "Morning", "needed": req_morning, "priority": 3})
+        if req_evening > 0: shift_slots.append({"day": day, "type": "Evening", "needed": req_evening, "priority": 3})
+
+    # ALLOCATION LOOP (Priority Order)
+    for slot in shift_slots:
+        day = slot["day"]
+        s_type = slot["type"]
+        needed = slot["needed"]
         is_weekend = day in ["Saturday", "Sunday"]
-        for s_type in shift_types:
-            needed = req_morning if s_type == "Morning" else (req_evening if s_type == "Evening" else req_night)
+        
+        candidates = []
+        for name, p in staff_db.items():
+            if p["Assigned_Count"] >= p["Max_Days"]:
+                continue
+            if day in p["Unavailable_Days"]:
+                continue
+            if s_type == "Night" and p["No_Nights"]:
+                continue
+            already_working_today = any(name in roster_grid[day][st_item] for st_item in ["Morning", "Evening", "Night"])
+            if already_working_today:
+                continue
+                
+            candidates.append(name)
             
-            candidates = []
-            for name, p in staff_db.items():
-                if p["Assigned_Count"] >= p["Max_Days"]:
-                    continue
-                if day in p["Unavailable_Days"]:
-                    continue
-                if s_type == "Night" and p["No_Nights"]:
-                    continue
-                already_working_today = any(name in roster_grid[day][st_item] for st_item in shift_types)
-                if already_working_today:
-                    continue
-                    
-                candidates.append(name)
-            
-            # FAIR ROTATION HEURISTIC:
-            # If Night shift, prioritize by LEAST NIGHT SHIFTS WORKED SO FAR.
-            # If Weekend, prioritize by LEAST WEEKEND SHIFTS WORKED SO FAR.
+        # SMART SORTING BASED ON SHIFT TYPE & WORKLOAD RATIO
+        def get_sort_key(name):
+            p = staff_db[name]
+            workload_ratio = p["Assigned_Count"] / p["Max_Days"]
             if s_type == "Night":
-                candidates.sort(key=lambda x: (staff_db[x]["Night_Count"], staff_db[x]["Assigned_Count"], np.random.rand()))
+                return (p["Night_Count"], workload_ratio, np.random.rand())
             elif is_weekend:
-                candidates.sort(key=lambda x: (staff_db[x]["Weekend_Count"], staff_db[x]["Assigned_Count"], np.random.rand()))
+                return (p["Weekend_Count"], workload_ratio, np.random.rand())
             else:
-                candidates.sort(key=lambda x: (staff_db[x]["Assigned_Count"] / staff_db[x]["Max_Days"], np.random.rand()))
-            
-            assigned = candidates[:needed]
-            roster_grid[day][s_type] = assigned
-            
-            for name in assigned:
-                staff_db[name]["Assigned_Count"] += 1
-                if s_type == "Night":
-                    staff_db[name]["Night_Count"] += 1
-                if is_weekend:
-                    staff_db[name]["Weekend_Count"] += 1
-                    
-            if len(assigned) < needed:
-                conflict_logs.append(f"⚠️ **{day} ({s_type}):** Shortage! Needed {needed}, but only assigned {len(assigned)} due to constraints.")
+                # For normal shifts, prioritize staff with FEWER assigned shifts relative to max capacity
+                return (workload_ratio, np.random.rand())
+
+        candidates.sort(key=get_sort_key)
+        assigned = candidates[:needed]
+        
+        roster_grid[day][s_type].extend(assigned)
+        
+        for name in assigned:
+            staff_db[name]["Assigned_Count"] += 1
+            if s_type == "Night":
+                staff_db[name]["Night_Count"] += 1
+            if is_weekend:
+                staff_db[name]["Weekend_Count"] += 1
+                
+        if len(assigned) < needed:
+            conflict_logs.append(f"⚠️ **{day} ({s_type}):** Shortage! Needed {needed}, assigned {len(assigned)}.")
 
     st.markdown("### 📋 Generated Roster Grid")
     
     roster_display = []
     for day in days_of_week:
         row = {"Day": day}
-        for s_type in shift_types:
-            assigned_names = roster_grid[day][s_type]
-            row[s_type] = ", ".join(assigned_names) if assigned_names else "❌ SHORTAGE"
+        for s_type in ["Morning", "Evening", "Night"]:
+            if (s_type == "Morning" and req_morning > 0) or (s_type == "Evening" and req_evening > 0) or (s_type == "Night" and req_night > 0):
+                assigned_names = roster_grid[day][s_type]
+                row[s_type] = ", ".join(assigned_names) if assigned_names else "❌ SHORTAGE"
         roster_display.append(row)
         
     df_roster_view = pd.DataFrame(roster_display)

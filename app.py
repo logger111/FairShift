@@ -22,6 +22,8 @@ if "staff_list" not in st.session_state:
         {"Name": "Elena Rostova", "Role": "Junior", "Max_Days": 5, "No_Nights": False, "Unavailable_Days": ["Wednesday"]},
         {"Name": "Michael Scott", "Role": "Junior", "Max_Days": 5, "No_Nights": False, "Unavailable_Days": []},
         {"Name": "Rachel Adams", "Role": "Senior", "Max_Days": 5, "No_Nights": True, "Unavailable_Days": []},
+        {"Name": "Julia Modi Aq", "Role": "Junior", "Max_Days": 5, "No_Nights": False, "Unavailable_Days": []},
+        {"Name": "Antonio Bander", "Role": "Junior", "Max_Days": 5, "No_Nights": False, "Unavailable_Days": []},
     ]
 
 # --- TABS FOR NAVIGATION ---
@@ -116,8 +118,15 @@ with tab_roster:
                     
                 candidates.append(name)
             
-            # Prioritize candidates who have worked fewer shifts overall
-            candidates.sort(key=lambda x: (staff_db[x]["Assigned_Count"] / staff_db[x]["Max_Days"], np.random.rand()))
+            # FAIR ROTATION HEURISTIC:
+            # If Night shift, prioritize by LEAST NIGHT SHIFTS WORKED SO FAR.
+            # If Weekend, prioritize by LEAST WEEKEND SHIFTS WORKED SO FAR.
+            if s_type == "Night":
+                candidates.sort(key=lambda x: (staff_db[x]["Night_Count"], staff_db[x]["Assigned_Count"], np.random.rand()))
+            elif is_weekend:
+                candidates.sort(key=lambda x: (staff_db[x]["Weekend_Count"], staff_db[x]["Assigned_Count"], np.random.rand()))
+            else:
+                candidates.sort(key=lambda x: (staff_db[x]["Assigned_Count"] / staff_db[x]["Max_Days"], np.random.rand()))
             
             assigned = candidates[:needed]
             roster_grid[day][s_type] = assigned
@@ -169,7 +178,6 @@ with tab_analytics:
     df_final_stats = pd.DataFrame(list(staff_db.values()))
     df_final_stats["Workload_%"] = (df_final_stats["Assigned_Count"] / df_final_stats["Max_Days"] * 100).round(1)
     
-    # Calculate FSI based on WORKLOAD PERCENTAGE variance instead of simple raw count
     workload_ratios = df_final_stats["Assigned_Count"] / df_final_stats["Max_Days"]
     mean_w = np.mean(workload_ratios)
     std_w = np.std(workload_ratios)
@@ -177,7 +185,6 @@ with tab_analytics:
     fsi = round((1 - (std_w / mean_w if mean_w > 0 else 0)) * 100, 1) if mean_w > 0 else 100.0
     fsi = max(0.0, min(100.0, fsi))
     
-    # Identify Overworked Staff
     overworked = df_final_stats[df_final_stats["Workload_%"] >= 100]["Name"].tolist()
     
     col_m1, col_m2, col_m3 = st.columns(3)
@@ -192,7 +199,6 @@ with tab_analytics:
     
     st.subheader("Individual Shift Load & Capacity Utilization")
     
-    # Display table with workload status
     st.dataframe(
         df_final_stats[["Name", "Role", "Max_Days", "Assigned_Count", "Workload_%", "Weekend_Count", "Night_Count"]],
         use_container_width=True,

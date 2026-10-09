@@ -1,193 +1,196 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import plotly.express as px
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(
-    page_title="FairShift Engine v2.0 | Operational Scheduling Simulator",
-    page_icon="⚖️",
+    page_title="FairShift Engine v3.0 | Real-World Roster Builder",
+    page_icon="📅",
     layout="wide"
 )
 
-# --- TITLE & HEADER ---
-st.title("⚖️ FairShift Engine v2.0")
-st.caption("Advanced B2B Operational Scheduling & Fairness Optimization Simulator")
+st.title("📅 FairShift Engine v3.0 — Real-World Roster & Constraint Builder")
+st.caption("Custom Staff Management, Individual Availability & Dynamic Shift Assignment")
 st.markdown("---")
 
-# --- SIDEBAR: OPERATIONAL CONFIGURATION ---
-st.sidebar.header("⚙️ Operational Parameters")
+# --- INITIALIZE SESSION STATE FOR STAFF & RESTRICTIONS ---
+if "staff_list" not in st.session_state:
+    st.session_state.staff_list = [
+        {"Name": "Alex Green", "Role": "Senior", "Max_Days": 5, "No_Nights": False, "Unavailable_Days": ["Sunday"]},
+        {"Name": "Sarah Cole", "Role": "Senior", "Max_Days": 5, "No_Nights": False, "Unavailable_Days": []},
+        {"Name": "David Miller", "Role": "Junior", "Max_Days": 4, "No_Nights": True, "Unavailable_Days": ["Saturday", "Sunday"]},
+        {"Name": "Elena Rostova", "Role": "Junior", "Max_Days": 5, "No_Nights": False, "Unavailable_Days": ["Wednesday"]},
+        {"Name": "Michael Scott", "Role": "Junior", "Max_Days": 5, "No_Nights": False, "Unavailable_Days": []},
+        {"Name": "Rachel Adams", "Role": "Senior", "Max_Days": 5, "No_Nights": True, "Unavailable_Days": []},
+    ]
 
-# 1. Team & Skill Composition
-st.sidebar.subheader("1. Workforce & Skills")
-total_staff = st.sidebar.number_input("Total Workforce Size", min_value=3, max_value=150, value=12, step=1)
-senior_ratio = st.sidebar.slider("Senior Staff Percentage (%)", min_value=0, max_value=100, value=25, step=5)
-hard_constraint_staff = st.sidebar.number_input("Staff with Fixed Restrictions (No Weekends/Nights)", min_value=0, max_value=int(total_staff), value=3, step=1)
+# --- TABS FOR NAVIGATION ---
+tab_staff, tab_roster, tab_analytics = st.tabs([
+    "👥 Staff & Restrictions", 
+    "🗓️ Weekly Roster Builder", 
+    "📊 Diagnostics & Fairness"
+])
 
-# Calculate Seniors
-num_seniors = int(round((senior_ratio / 100) * total_staff))
-
-# 2. Shift Demand Architecture
-st.sidebar.subheader("2. Shift Structure & Demand")
-shifts_per_day = st.sidebar.selectbox("Shifts per Day", options=[1, 2, 3, 4], index=2, help="1: Day only, 2: Day/Night, 3: Morning/Evening/Night, 4: 6-hour rotas")
-required_staff_per_shift = st.sidebar.number_input("Required Staff per Shift Slot", min_value=1, max_value=20, value=2, step=1)
-sim_weeks = st.sidebar.slider("Simulation Horizon (Weeks)", min_value=1, max_value=12, value=4)
-
-# 3. Policy & Rest Constraints
-st.sidebar.subheader("3. Labor & Safety Constraints")
-max_days_per_week = st.sidebar.slider("Max Working Days per Employee/Week", min_value=3, max_value=7, value=5)
-strict_skill_coverage = st.sidebar.checkbox("Enforce Strict Senior Coverage (≥1 Senior per Shift)", value=True)
-
-# --- CALCULATE TOTAL CAPACITY VS DEMAND ---
-total_days = sim_weeks * 7
-total_shift_slots_needed = total_days * shifts_per_day * required_staff_per_shift
-max_possible_employee_shifts = total_staff * max_days_per_week * sim_weeks
-
-# --- HARD CAPACITY CHECK (CRITICAL OVERLOAD DETECTION) ---
-is_overloaded = total_shift_slots_needed > max_possible_employee_shifts
-
-# --- ALGORITHM ENGINE SIMULATION ---
-np.random.seed(42)
-
-# Generate Employee Database
-employees = []
-for i in range(1, total_staff + 1):
-    emp_id = f"EMP_{i:02d}"
-    is_senior = i <= num_seniors
-    is_restricted = (not is_senior) and (i > (total_staff - hard_constraint_staff))
+# ==========================================
+# TAB 1: STAFF MANAGEMENT & RESTRICTIONS
+# ==========================================
+with tab_staff:
+    st.subheader("👥 Manage Staff & Individual Availability")
+    st.write("Add real employee names and define their individual availability constraints.")
     
-    tier = "Restricted (No Weekend/Night)" if is_restricted else ("Senior Flexible" if is_senior else "Standard Flexible")
-    employees.append({
-        "ID": emp_id,
-        "Role": "Senior" if is_senior else "Junior",
-        "Tier": tier,
-        "Is_Restricted": is_restricted,
-        "Is_Senior": is_senior,
-        "Assigned_Shifts": 0,
-        "Weekend_Shifts": 0,
-        "Night_Shifts": 0
-    })
+    # Add new employee form
+    with st.expander("➕ Add New Employee", expanded=False):
+        col_a, col_b, col_c = st.columns(3)
+        with col_a:
+            new_name = st.text_input("Full Name")
+            new_role = st.selectbox("Role", ["Senior", "Junior"])
+        with col_b:
+            new_max_days = st.number_input("Max Days/Week", min_value=1, max_value=7, value=5)
+            new_no_nights = st.checkbox("Cannot work Night Shifts")
+        with col_c:
+            new_unavail = st.multiselect("Unavailable Days", ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"])
+            submit_btn = st.button("Save Employee")
+            
+        if submit_btn and new_name:
+            st.session_state.staff_list.append({
+                "Name": new_name,
+                "Role": new_role,
+                "Max_Days": new_max_days,
+                "No_Nights": new_no_nights,
+                "Unavailable_Days": new_unavail
+            })
+            st.success(f"Added {new_name} to workforce!")
+            st.rerun()
 
-df_staff = pd.DataFrame(employees)
-
-# Shift Allocation Logic
-if not is_overloaded:
-    # Distribute shifts among flexible and restricted staff
-    for day in range(total_days):
-        is_weekend = (day % 7) in [5, 6]  # Fri/Sat
-        for shift_idx in range(shifts_per_day):
-            is_night = (shifts_per_day >= 3 and shift_idx == (shifts_per_day - 1))
-            
-            # Eligible workers
-            eligible_mask = df_staff["Assigned_Shifts"] < (max_days_per_week * sim_weeks)
-            if is_weekend or is_night:
-                eligible_mask = eligible_mask & (~df_staff["Is_Restricted"])
-            
-            eligible_indices = df_staff[eligible_mask].index.tolist()
-            
-            # Fallback if constraint bottleneck occurs
-            if len(eligible_indices) < required_staff_per_shift:
-                eligible_indices = df_staff.index.tolist() # Forced assignment causing inequality
-            
-            # Prioritize least-worked staff for fairness
-            sorted_indices = sorted(eligible_indices, key=lambda x: (df_staff.loc[x, "Assigned_Shifts"], np.random.rand()))
-            selected = sorted_indices[:required_staff_per_shift]
-            
-            for idx in selected:
-                df_staff.loc[idx, "Assigned_Shifts"] += 1
-                if is_weekend:
-                    df_staff.loc[idx, "Weekend_Shifts"] += 1
-                if is_night:
-                    df_staff.loc[idx, "Night_Shifts"] += 1
-
-# --- FAIRNESS SCORE INDEX (FSI) CALCULATION ---
-if is_overloaded:
-    fsi_score = 0.0
-else:
-    # FSI calculated based on standard deviation of workload distribution
-    assigned = df_staff["Assigned_Shifts"].values
-    mean_shifts = np.mean(assigned)
-    std_shifts = np.std(assigned)
+    # Staff Dataframe display with quick actions
+    df_staff_ui = pd.DataFrame(st.session_state.staff_list)
+    df_staff_ui["Unavailable_Days"] = df_staff_ui["Unavailable_Days"].apply(lambda x: ", ".join(x) if x else "None")
     
-    if mean_shifts > 0:
-        cv = std_shifts / mean_shifts # Coefficient of variation
-        fsi_score = max(0.0, min(100.0, round((1 - cv) * 100, 1)))
-    else:
-        fsi_score = 100.0
-
-# --- DASHBOARD UI DISPLAY ---
-
-# 🚨 OVERLOAD ALERT BANNER
-if is_overloaded:
-    st.error(f"🚨 **CRITICAL CAPACITY ERROR: IMPOSSIBLE SCHEDULE**\n\n"
-             f"• **Demand:** You need **{total_shift_slots_needed}** shift-slots to cover operations.\n"
-             f"• **Supply Limit:** Your workforce of {total_staff} (working max {max_days_per_week} days/week) can only provide **{max_possible_employee_shifts}** shift-slots.\n\n"
-             f"👉 **Action Required:** Increase workforce size, increase max days per week, or reduce required staff per shift.")
-
-# Top Metrics Row
-col1, col2, col3, col4 = st.columns(4)
-
-with col1:
-    st.metric(label="Total Required Slots", value=total_shift_slots_needed)
-
-with col2:
-    st.metric(label="Available Capacity", value=max_possible_employee_shifts)
-
-with col3:
-    senior_cov = f"{num_seniors} ({round(num_seniors/total_staff*100)}%)"
-    st.metric(label="Senior Workforce", value=senior_cov)
-
-with col4:
-    if is_overloaded or fsi_score < 60:
-        fsi_color = "🔴 Critical"
-    elif fsi_score < 80:
-        fsi_color = "🟡 Warning"
-    else:
-        fsi_color = "🟢 Optimal"
-    st.metric(label="Fairness Index (FSI)", value=f"{fsi_score}%", delta=fsi_color, delta_color="normal" if fsi_score>=80 else "inverse")
-
-st.markdown("---")
-
-# Status Alert Box
-if not is_overloaded:
-    if fsi_score >= 80:
-        st.success(f"🟢 **HEALTHY SCHEDULE (FSI: {fsi_score}%):** Workload is evenly distributed across eligible staff with safe skill coverage.")
-    elif fsi_score >= 65:
-        st.warning(f"🟡 **MODERATE INEQUALITY (FSI: {fsi_score}%):** Restricted staff preferences are forcing standard/flexible employees to bear a heavier weekend/night load.")
-    else:
-        st.error(f"🔴 **CRITICAL WORKLOAD BURNOUT (FSI: {fsi_score}%):** Extreme distribution imbalance! A small subset of employees is taking almost all unpopular shifts.")
-
-# --- ANALYTICS CHARTS & TABLES ---
-if not is_overloaded:
-    st.subheader("📊 Workload & Shift Allocation Breakdown")
+    st.dataframe(df_staff_ui, use_container_width=True, hide_index=True)
     
-    col_chart, col_table = st.columns([3, 2])
+    if st.button("🗑️ Reset to Default Team"):
+        st.session_state.pop("staff_list", None)
+        st.rerun()
+
+# ==========================================
+# TAB 2: WEEKLY ROSTER BUILDER ENGINE
+# ==========================================
+with tab_roster:
+    st.subheader("🗓️ Generate Individual Shift Assignment")
     
-    with col_chart:
-        fig = px.bar(
-            df_staff,
-            x="ID",
-            y=["Assigned_Shifts", "Weekend_Shifts", "Night_Shifts"],
-            title="Assigned Shifts per Employee (Total vs Unpopular)",
-            labels={"value": "Number of Shifts", "ID": "Employee ID", "variable": "Shift Type"},
-            barmode="group",
-            color_discrete_sequence=["#1f77b4", "#ff7f0e", "#d62728"]
-        )
-        st.plotly_chart(fig, use_container_width=True)
+    col_cfg1, col_cfg2, col_cfg3 = st.columns(3)
+    with col_cfg1:
+        req_morning = st.number_input("Morning Shift Staff Needed", min_value=1, max_value=10, value=2)
+    with col_cfg2:
+        req_evening = st.number_input("Evening Shift Staff Needed", min_value=1, max_value=10, value=2)
+    with col_cfg3:
+        req_night = st.number_input("Night Shift Staff Needed", min_value=0, max_value=10, value=1)
         
-    with col_table:
-        st.subheader("📋 Roster Summary Table")
-        st.dataframe(
-            df_staff[["ID", "Role", "Tier", "Assigned_Shifts", "Weekend_Shifts", "Night_Shifts"]],
-            hide_index=True,
-            use_container_width=True
-        )
+    days_of_week = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    shift_types = []
+    if req_morning > 0: shift_types.append("Morning")
+    if req_evening > 0: shift_types.append("Evening")
+    if req_night > 0: shift_types.append("Night")
+
+    # ALGORITHM: Generate Schedule matching constraints
+    staff_db = {emp["Name"]: {**emp, "Assigned_Count": 0, "Night_Count": 0} for emp in st.session_state.staff_list}
+    
+    roster_grid = {day: {s: [] for s in shift_types} for day in days_of_week}
+    conflict_logs = []
+
+    np.random.seed(42)
+
+    for day in days_of_week:
+        for s_type in shift_types:
+            needed = req_morning if s_type == "Morning" else (req_evening if s_type == "Evening" else req_night)
+            
+            # Filter candidates based on HARD CONSTRAINTS
+            candidates = []
+            for name, p in staff_db.items():
+                # Constraint 1: Max Days
+                if p["Assigned_Count"] >= p["Max_Days"]:
+                    continue
+                # Constraint 2: Specific Day Unavailable
+                if day in p["Unavailable_Days"]:
+                    continue
+                # Constraint 3: No Nights rule
+                if s_type == "Night" and p["No_Nights"]:
+                    continue
+                # Constraint 4: Already working today in another shift
+                already_working_today = any(name in roster_grid[day][st_item] for st_item in shift_types)
+                if already_working_today:
+                    continue
+                    
+                candidates.append(name)
+            
+            # Sort candidates by least assigned shifts (Fairness heuristic)
+            candidates.sort(key=lambda x: (staff_db[x]["Assigned_Count"], np.random.rand()))
+            
+            assigned = candidates[:needed]
+            roster_grid[day][s_type] = assigned
+            
+            for name in assigned:
+                staff_db[name]["Assigned_Count"] += 1
+                if s_type == "Night":
+                    staff_db[name]["Night_Count"] += 1
+                    
+            if len(assigned) < needed:
+                conflict_logs.append(f"⚠️ **{day} ({s_type}):** Shortage! Needed {needed}, but only assigned {len(assigned)} due to constraints.")
+
+    # Render Roster Table
+    st.markdown("### 📋 Generated Roster Grid")
+    
+    roster_display = []
+    for day in days_of_week:
+        row = {"Day": day}
+        for s_type in shift_types:
+            assigned_names = roster_grid[day][s_type]
+            row[s_type] = ", ".join(assigned_names) if assigned_names else "❌ SHORTAGE"
+        roster_display.append(row)
         
-        # CSV Download Button
-        csv_data = df_staff.to_csv(index=False).encode('utf-8')
-        st.download_button(
-            label="📥 Download Roster Summary (CSV)",
-            data=csv_data,
-            file_name=f"FairShift_Roster_{total_staff}staff_{sim_weeks}w.csv",
-            mime="text/csv"
-        )
+    df_roster_view = pd.DataFrame(roster_display)
+    st.dataframe(df_roster_view, use_container_width=True, hide_index=True)
+    
+    # Show Conflict warnings if any
+    if conflict_logs:
+        st.error("🚨 **Roster Conflicts & Unfilled Shifts Detected:**")
+        for log in conflict_logs:
+            st.write(log)
+    else:
+        st.success("✅ **100% Shift Coverage Achieved!** All individual constraints respected without coverage gaps.")
+
+    # CSV Download for Roster
+    csv_roster = df_roster_view.to_csv(index=False).encode('utf-8')
+    st.download_button(
+        label="📥 Download Weekly Schedule (CSV)",
+        data=csv_roster,
+        file_name="FairShift_Weekly_Roster.csv",
+        mime="text/csv"
+    )
+
+# ==========================================
+# TAB 3: DIAGNOSTICS & FAIRNESS SCORE
+# ==========================================
+with tab_analytics:
+    st.subheader("📊 Individual Workload & Fairness Diagnostics")
+    
+    df_final_stats = pd.DataFrame(list(staff_db.values()))
+    
+    # Calculate FSI
+    counts = df_final_stats["Assigned_Count"].values
+    mean_c = np.mean(counts)
+    std_c = np.std(counts)
+    fsi = round((1 - (std_c / mean_c if mean_c > 0 else 0)) * 100, 1) if mean_c > 0 else 100.0
+    
+    col_m1, col_m2, col_m3 = st.columns(3)
+    col_m1.metric("Fairness Score Index (FSI)", f"{fsi}%")
+    col_m2.metric("Total Workforce", len(df_final_stats))
+    col_m3.metric("Conflicts Found", len(conflict_logs))
+    
+    st.markdown("---")
+    st.subheader("Individual Shift Load")
+    st.dataframe(
+        df_final_stats[["Name", "Role", "Max_Days", "Assigned_Count", "Night_Count"]],
+        use_container_width=True,
+        hide_index=True
+    )
